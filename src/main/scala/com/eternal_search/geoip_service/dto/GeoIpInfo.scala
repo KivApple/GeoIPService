@@ -10,5 +10,5 @@ case class GeoIpInfo(
 	accuracyRadius: Option[Int],
 	timezone: Option[String],
 	isInEuropeanUnion: Option[Boolean],
-	region: Option[GeoRegionInfo]
+	location: Option[GeoRegionInfo]
 )

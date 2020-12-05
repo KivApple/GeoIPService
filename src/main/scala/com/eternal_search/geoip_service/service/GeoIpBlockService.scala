@@ -1,11 +1,15 @@
 package com.eternal_search.geoip_service.service
 
 import cats.effect.IO
+import cats.free.Free
+import cats.implicits.catsSyntaxApplicativeId
 import com.eternal_search.geoip_service.Database
 import com.eternal_search.geoip_service.model.{GeoIpBlock, GeoIpLocation, GeoIpTimezone}
 import doobie.ConnectionIO
+import doobie.free.connection
 import fs2.Stream
 import doobie.implicits._
+import io.getquill.Query
 
 class GeoIpBlockService(val db: Database) {
 	import db.dc._
@@ -29,8 +33,8 @@ class GeoIpBlockService(val db: Database) {
 			).map(_ => chunk))
 			.flatMap(Stream.eval)
 			.flatMap(Stream.chunk)
-			
-	def find(address: String, localeCode: String): IO[Option[(GeoIpBlock, Option[GeoIpLocation], Option[GeoIpTimezone])]] =
+	
+	def find(address: String, localeCode: String): IO[Option[(GeoIpBlock, Seq[GeoIpLocation], Option[GeoIpTimezone])]] =
 		run(
 			blocks
 				.leftJoin(locations)
@@ -42,5 +46,39 @@ class GeoIpBlockService(val db: Database) {
 		)
 			.map(_.headOption)
 			.map(_.map { case ((block, location), timezone) => (block, location, timezone) })
+			.flatMap {
+				case Some((block, location, timezone)) =>
+					location.map(_.id) match {
+						case Some(id) => val t: ConnectionIO[Option[(GeoIpBlock, Seq[GeoIpLocation], Option[GeoIpTimezone])]] =
+							run(infix"""
+									WITH RECURSIVE parents AS (
+										SELECT * FROM geoip_locations
+											WHERE id = ${lift(id)} AND locale_code = ${lift(localeCode)}
+										UNION SELECT p.* FROM geoip_locations p
+											INNER JOIN parents c
+												ON c.parent_id = p.id and c.locale_code = p.locale_code
+									) SELECT
+										id, locale_code as localeCode, name, code, level,
+										timezone_id as timezoneId,
+					 					is_in_european_union as isInEuropeanUnion,
+					 					parent_id as parentId
+									FROM parents
+								""".as[Query[GeoIpLocation]]
+							).map(locations =>
+								Option((block, locations, timezone))
+							)
+							t
+						case None =>
+							val t: ConnectionIO[Option[(GeoIpBlock, Seq[GeoIpLocation], Option[GeoIpTimezone])]] =
+								Option((block, location match {
+									case Some(a) => Seq(a)
+									case None => Seq.empty
+								}, timezone)).pure[ConnectionIO]
+							t
+					}
+				case None => val t: ConnectionIO[Option[(GeoIpBlock, Seq[GeoIpLocation], Option[GeoIpTimezone])]] =
+					Option[(GeoIpBlock, Seq[GeoIpLocation], Option[GeoIpTimezone])](null).pure[ConnectionIO]
+					t
+			}
 			.transact(db.xa)
 }
