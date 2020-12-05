@@ -1,0 +1,2 @@
+ALTER TABLE geoip_locations ALTER CONSTRAINT geoip_locations_parent_id_locale_code_fkey DEFERRABLE;
+ALTER TABLE geoip_locations ALTER CONSTRAINT geoip_locations_timezone_id_fkey DEFERRABLE;

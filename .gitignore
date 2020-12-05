@@ -1,0 +1,11 @@
+/.idea
+/tmp
+/target
+/project/target
+/.bsp
+
+Thumbs.db
+.DS_Store
+.directory
+
+/src/main/resources/application_custom.conf
