@@ -1,12 +1,10 @@
 package com.eternal_search.geoip_service.service
 
 import cats.effect.IO
-import cats.free.Free
 import cats.implicits.catsSyntaxApplicativeId
 import com.eternal_search.geoip_service.Database
 import com.eternal_search.geoip_service.model.{GeoIpBlock, GeoIpLocation, GeoIpTimezone}
 import doobie.ConnectionIO
-import doobie.free.connection
 import fs2.Stream
 import doobie.implicits._
 import io.getquill.Query
