@@ -1,6 +1,6 @@
 package com.eternal_search.geoip_service.service
 
-import cats.effect.{ContextShift, IO, Sync}
+import cats.effect.IO
 import com.eternal_search.geoip_service.model.{GeoIpBlock, GeoIpLocation, GeoIpTimezone}
 import fs2.Stream
 
