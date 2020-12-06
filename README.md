@@ -19,6 +19,7 @@ Service that serves MaxMind GeoIP database
     max-mind {
         license-key = "YOUR_LICENSE_KEY"
         download-url = "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City-CSV&license_key=@&suffix=zip"
+        update-interval-days = 3
     }
 
 **Note:** Only PostgreSQL database URL is supported at the moment.
