@@ -3,7 +3,8 @@ package com.eternal_search.geoip_service.maxmind
 import cats.effect.concurrent.Ref
 import cats.effect.{Blocker, ConcurrentEffect, ContextShift, IO, Resource, Sync, Timer}
 import cats.implicits.catsSyntaxApplicativeId
-import com.eternal_search.geoip_service.service.{GeoIpBlockService, GeoIpLocationService, GeoIpTimezoneService}
+import com.eternal_search.geoip_service.dto.GeoIpUpdateStatus
+import com.eternal_search.geoip_service.service.{GeoIpBlockService, GeoIpLocationService, GeoIpTimezoneService, LastUpdateService}
 import com.eternal_search.geoip_service.{Config, Database}
 import doobie.ConnectionIO
 import fs2.Stream
@@ -21,6 +22,7 @@ class MaxMindDownloader(
 	private val geoIpBlockService: GeoIpBlockService,
 	private val geoIpLocationService: GeoIpLocationService,
 	private val geoIpTimezoneService: GeoIpTimezoneService,
+	private val lastUpdateService: LastUpdateService,
 	config: Config.MaxMindDownloaderConfig,
 	tempDir: String
 )(
@@ -33,6 +35,21 @@ class MaxMindDownloader(
 	
 	private val downloadUri = Uri.unsafeFromString(config.downloadUrl.replace("@", config.licenseKey))
 	private val blocker = Blocker.liftExecutionContext(executionContext)
+	private val downloadingFlag = Ref.of(false).unsafeRunSync()
+	private val parsingFlag = Ref.of(false).unsafeRunSync()
+	
+	def status: IO[GeoIpUpdateStatus] =
+		downloadingFlag.get.flatMap(downloadingFlag =>
+			if (downloadingFlag)
+				IO.pure(GeoIpUpdateStatus.Downloading)
+			else
+				parsingFlag.get.map(parsingFlag =>
+					if (parsingFlag)
+						GeoIpUpdateStatus.Parsing
+					else
+						GeoIpUpdateStatus.Idle
+				)
+		)
 	
 	private def streamUrl(uri: Uri): Stream[IO, Byte] =
 		BlazeClientBuilder(executionContext)
@@ -115,13 +132,25 @@ class MaxMindDownloader(
 	private def parseDataArchive(path: Path): IO[Either[Throwable, Unit]] = {
 		import doobie.implicits._
 		
-		geoIpLocationService.beginUpdate()
-			.flatMap(_ => geoIpLocationService.clear())
-			.flatMap(_ => geoIpTimezoneService.clear())
-			.flatMap(_ => geoIpBlockService.clear())
-			.flatMap(_ => doParseDataArchive(path))
-			.transact(database.xa)
-			.attempt
+		parsingFlag.getAndSet(true)
+			.flatMap { flag =>
+				if (!flag) {
+					geoIpLocationService.beginUpdate()
+						.flatMap(_ => geoIpLocationService.clear())
+						.flatMap(_ => geoIpTimezoneService.clear())
+						.flatMap(_ => geoIpBlockService.clear())
+						.flatMap(_ => doParseDataArchive(path))
+						.flatMap(_ => lastUpdateService.markUpdated())
+						.transact(database.xa)
+						.flatMap(_ => IO {
+							Files.deleteIfExists(path)
+							()
+						})
+						.attempt <* parsingFlag.set(false)
+				} else {
+					IO.pure(Left(new Exception("Database is already parsing now")))
+				}
+			}
 	}
 	
 	private def downloadDatabaseArchive(uri: Uri, path: Path): IO[Either[Throwable, Unit]] = {
@@ -139,12 +168,18 @@ class MaxMindDownloader(
 	}
 	
 	def downloadArchive: IO[Either[Throwable, Path]] = {
-		val path = Paths.get(tempDir, "archive.zip")
-		IO(Files.exists(path)).flatMap(
-			if (_) IO({
-				log.info("Database archive already exists. Skipping downloading...")
-				Right(path)
-			}) else downloadDatabaseArchive(downloadUri, path).map(_.map(_ => path))
+		downloadingFlag.getAndSet(true).flatMap(flag =>
+			if (!flag) {
+				val path = Paths.get(tempDir, "archive.zip")
+				IO(Files.exists(path)).flatMap(
+					if (_) IO({
+						log.info("Database archive already exists. Skipping downloading...")
+						Right(path)
+					}) else downloadDatabaseArchive(downloadUri, path).map(_.map(_ => path))
+				) <* downloadingFlag.set(false)
+			} else {
+				IO.pure(Left(new Exception("Database is already downloading now")))
+			}
 		)
 	}
 	

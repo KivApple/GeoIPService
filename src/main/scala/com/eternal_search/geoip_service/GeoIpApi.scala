@@ -22,5 +22,11 @@ object GeoIpApi {
 			.errorOut(stringBody)
 			.out(jsonBody[GeoIpStatus])
 	
-	val endpoints = Seq(searchEndpoint, statusEndpoint)
+	val updateEndpoint: Endpoint[Unit, String, Unit, Any] =
+		endpoint
+			.post
+			.in("update")
+			.errorOut(stringBody)
+	
+	val endpoints = Seq(searchEndpoint, statusEndpoint, updateEndpoint)
 }

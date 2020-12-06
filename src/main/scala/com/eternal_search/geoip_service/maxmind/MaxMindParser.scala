@@ -209,7 +209,7 @@ object MaxMindParser {
 			postalCode = Some(entry(headers("postal_code"))).filter(_.nonEmpty),
 			latitude = Some(entry(headers("latitude"))).filter(_.nonEmpty).flatMap(_.toDoubleOption),
 			longitude = Some(entry(headers("longitude"))).filter(_.nonEmpty).flatMap(_.toDoubleOption),
-			accuracyRadius = Some(entry(headers("accuracy_radius"))).filter(_.nonEmpty).flatMap(_.toFloatOption),
+			accuracyRadius = Some(entry(headers("accuracy_radius"))).filter(_.nonEmpty).flatMap(_.toIntOption),
 			isAnonymousProxy = entry(headers("is_anonymous_proxy")) != "0",
 			isSatelliteProvider = entry(headers("is_satellite_provider")) != "0"
 		)

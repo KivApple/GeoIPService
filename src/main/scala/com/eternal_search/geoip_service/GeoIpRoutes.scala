@@ -1,20 +1,22 @@
 package com.eternal_search.geoip_service
 
 import java.time.Instant
-import cats.implicits.catsSyntaxEitherId
+import cats.implicits.{catsSyntaxApply, catsSyntaxEitherId}
 import cats.syntax.semigroupk._
-import cats.effect.{ContextShift, IO, Timer}
+import cats.effect.{ContextShift, IO, SyncIO, Timer}
 import com.eternal_search.geoip_service.dto._
-import com.eternal_search.geoip_service.maxmind.MaxMindParser
+import com.eternal_search.geoip_service.maxmind.{MaxMindDownloader, MaxMindParser}
 import com.eternal_search.geoip_service.model.GeoIpLocation
-import com.eternal_search.geoip_service.service.GeoIpBlockService
+import com.eternal_search.geoip_service.service.{GeoIpBlockService, LastUpdateService}
 import sttp.tapir.server.http4s._
 import org.http4s.HttpRoutes
 
 import scala.util.matching.Regex
 
 class GeoIpRoutes(
-	private val geoIpBlockService: GeoIpBlockService
+	private val geoIpBlockService: GeoIpBlockService,
+	private val lastUpdateService: LastUpdateService,
+	private val maxMindDownloader: MaxMindDownloader
 )(
 	implicit private val contextShift: ContextShift[IO],
 	implicit private val timer: Timer[IO]
@@ -64,9 +66,22 @@ class GeoIpRoutes(
 			})
 	}
 	
-	val statusRoute: HttpRoutes[IO] = GeoIpApi.statusEndpoint.toRoutes(_ => IO(GeoIpStatus(
-		lastUpdate = Instant.now()
-	).asRight[String]))
+	val statusRoute: HttpRoutes[IO] = GeoIpApi.statusEndpoint.toRoutes(_ =>
+		lastUpdateService.lastUpdatedAt().flatMap(lastUpdatedAt =>
+			maxMindDownloader.status.map(status =>
+				GeoIpStatus(
+					lastUpdate = lastUpdatedAt,
+					updateStatus = status
+				).asRight[String]
+			)
+		)
+	)
+
+	val updateRoute: HttpRoutes[IO] = GeoIpApi.updateEndpoint.toRoutes(_ => {
+		maxMindDownloader.downloadAndUpdateDatabase.runAsync(_ => IO.unit).flatMap(_ =>
+			SyncIO.pure(().asRight[String])
+		).to[IO]
+	})
 	
-	val routes: HttpRoutes[IO] = searchRoute <+> statusRoute
+	val routes: HttpRoutes[IO] = searchRoute <+> statusRoute <+> updateRoute
 }
