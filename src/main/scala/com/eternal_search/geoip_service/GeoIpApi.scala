@@ -15,6 +15,13 @@ object GeoIpApi {
 			.errorOut(stringBody)
 			.out(jsonBody[GeoIpInfo])
 	
+	val localesEndpoint: Endpoint[Unit, String, Seq[String], Any] =
+		endpoint
+			.get
+			.in("locales")
+			.errorOut(stringBody)
+			.out(jsonBody[Seq[String]])
+	
 	val statusEndpoint: Endpoint[Unit, String, GeoIpStatus, Any] =
 		endpoint
 			.get
@@ -28,5 +35,5 @@ object GeoIpApi {
 			.in("update")
 			.errorOut(stringBody)
 	
-	val endpoints = Seq(searchEndpoint, statusEndpoint, updateEndpoint)
+	val endpoints = Seq(searchEndpoint, localesEndpoint, statusEndpoint, updateEndpoint)
 }

@@ -7,7 +7,7 @@ import cats.effect.{ContextShift, IO, SyncIO, Timer}
 import com.eternal_search.geoip_service.dto._
 import com.eternal_search.geoip_service.maxmind.{MaxMindDownloader, MaxMindParser}
 import com.eternal_search.geoip_service.model.GeoIpLocation
-import com.eternal_search.geoip_service.service.{GeoIpBlockService, LastUpdateService}
+import com.eternal_search.geoip_service.service.{GeoIpBlockService, GeoIpLocaleService, LastUpdateService}
 import sttp.tapir.server.http4s._
 import org.http4s.HttpRoutes
 
@@ -15,6 +15,7 @@ import scala.util.matching.Regex
 
 class GeoIpRoutes(
 	private val geoIpBlockService: GeoIpBlockService,
+	private val geoIpLocaleService: GeoIpLocaleService,
 	private val lastUpdateService: LastUpdateService,
 	private val maxMindDownloader: MaxMindDownloader
 )(
@@ -66,6 +67,10 @@ class GeoIpRoutes(
 			})
 	}
 	
+	val localesRoute: HttpRoutes[IO] = GeoIpApi.localesEndpoint.toRoutes(_ =>
+		geoIpLocaleService.findAll().map(_.asRight[String])
+	)
+	
 	val statusRoute: HttpRoutes[IO] = GeoIpApi.statusEndpoint.toRoutes(_ =>
 		lastUpdateService.lastUpdatedAt().flatMap(lastUpdatedAt =>
 			maxMindDownloader.status.map(status =>
@@ -83,5 +88,5 @@ class GeoIpRoutes(
 		).to[IO]
 	})
 	
-	val routes: HttpRoutes[IO] = searchRoute <+> statusRoute <+> updateRoute
+	val routes: HttpRoutes[IO] = searchRoute <+> localesRoute <+> statusRoute <+> updateRoute
 }

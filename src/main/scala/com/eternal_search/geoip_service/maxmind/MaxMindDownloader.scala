@@ -4,7 +4,7 @@ import cats.effect.concurrent.Ref
 import cats.effect.{Blocker, ConcurrentEffect, ContextShift, IO, Resource, Sync, Timer}
 import cats.implicits.catsSyntaxApplicativeId
 import com.eternal_search.geoip_service.dto.GeoIpUpdateStatus
-import com.eternal_search.geoip_service.service.{GeoIpBlockService, GeoIpLocationService, GeoIpTimezoneService, LastUpdateService}
+import com.eternal_search.geoip_service.service.{GeoIpBlockService, GeoIpLocaleService, GeoIpLocationService, GeoIpTimezoneService, LastUpdateService}
 import com.eternal_search.geoip_service.{Config, Database}
 import doobie.ConnectionIO
 import fs2.Stream
@@ -22,6 +22,7 @@ class MaxMindDownloader(
 	private val geoIpBlockService: GeoIpBlockService,
 	private val geoIpLocationService: GeoIpLocationService,
 	private val geoIpTimezoneService: GeoIpTimezoneService,
+	private val geoIpLocaleService: GeoIpLocaleService,
 	private val lastUpdateService: LastUpdateService,
 	config: Config.MaxMindDownloaderConfig,
 	tempDir: String
@@ -124,7 +125,17 @@ class MaxMindDownloader(
 					closeAfterUse = false
 				)
 			) }
-			.flatMap { case (name, stream) => parseDataFile(name(0), name(1), stream) }
+			.flatMap { case (name, stream) =>
+				parseDataFile(name(0), name(1), stream).flatMap(_ =>
+					if (name(0) == "Locations")
+						Stream.emit(name(1))
+					else
+						Stream.empty
+				)
+			}
+			.through(geoIpLocaleService.insert)
+			.fold(0) { case (count, _) => count + 1 }
+			.map(log.info("Imported {} locales", _))
 			.compile
 			.drain
 	}
