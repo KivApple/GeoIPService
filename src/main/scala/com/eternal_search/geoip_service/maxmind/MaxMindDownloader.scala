@@ -27,7 +27,10 @@ class MaxMindDownloader[F[_] : Sync : ContextShift](
 ) extends GeoIpUpdater {
 	private val log = LoggerFactory.getLogger(getClass)
 	
-	private val downloadUri = Uri.unsafeFromString(config.downloadUrl.replace("@", config.licenseKey))
+	private val downloadUri = (config.licenseKey match {
+		case Some(licenseKey) => config.downloadUrl.map(_.replace("@", licenseKey))
+		case None => config.downloadUrl
+	}).map(Uri.unsafeFromString)
 	private val blocker = Blocker.liftExecutionContext(executionContext)
 	
 	override def status: IO[GeoIpUpdateStatus] =
@@ -106,7 +109,8 @@ class MaxMindDownloader[F[_] : Sync : ContextShift](
 					if (_) IO({
 						log.info("Database archive already exists. Skipping downloading...")
 						Right(path)
-					}) else downloadDatabaseArchive(downloadUri, path).map(_.map(_ => path))
+					}) else downloadUri.map(uri => downloadDatabaseArchive(uri, path).map(_.map(_ => path)))
+						.getOrElse(throw new Exception("No database download URL specified"))
 				) <* downloadingFlag.set(false)
 			} else {
 				IO.pure(Left(new Exception("Database is already downloading now")))

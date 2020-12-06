@@ -17,8 +17,8 @@ object Config {
 	)
 	
 	case class MaxMindDownloaderConfig(
-		licenseKey: String,
-		downloadUrl: String,
+		licenseKey: Option[String],
+		downloadUrl: Option[String],
 		updateIntervalDays: Option[Int]
 	)
 }
