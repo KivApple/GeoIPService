@@ -1,9 +1,9 @@
 package com.eternal_search.geoip_service.dto
 
-case class GeoRegionInfo(
+case class GeoRegionTreeInfo(
 	id: Long,
 	level: GeoRegionLevel,
 	code: Option[String],
 	name: Option[String],
-	parentId: Option[Long]
+	parent: Option[GeoRegionTreeInfo]
 )

@@ -42,6 +42,7 @@ object Main extends IOApp {
 
 		val geoIpRoutes = new GeoIpRoutes(
 			geoIpBlockService,
+			geoIpLocationService,
 			geoIpLocaleService,
 			lastUpdateService,
 			maxMindDownloader

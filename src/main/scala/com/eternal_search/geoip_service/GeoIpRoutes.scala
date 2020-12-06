@@ -1,13 +1,12 @@
 package com.eternal_search.geoip_service
 
-import java.time.Instant
-import cats.implicits.{catsSyntaxApply, catsSyntaxEitherId}
+import cats.implicits.catsSyntaxEitherId
 import cats.syntax.semigroupk._
 import cats.effect.{ContextShift, IO, SyncIO, Timer}
 import com.eternal_search.geoip_service.dto._
 import com.eternal_search.geoip_service.maxmind.{MaxMindDownloader, MaxMindParser}
 import com.eternal_search.geoip_service.model.GeoIpLocation
-import com.eternal_search.geoip_service.service.{GeoIpBlockService, GeoIpLocaleService, LastUpdateService}
+import com.eternal_search.geoip_service.service.{GeoIpBlockService, GeoIpLocaleService, GeoIpLocationService, LastUpdateService}
 import sttp.tapir.server.http4s._
 import org.http4s.HttpRoutes
 
@@ -15,6 +14,7 @@ import scala.util.matching.Regex
 
 class GeoIpRoutes(
 	private val geoIpBlockService: GeoIpBlockService,
+	private val geoIpLocationService: GeoIpLocationService,
 	private val geoIpLocaleService: GeoIpLocaleService,
 	private val lastUpdateService: LastUpdateService,
 	private val maxMindDownloader: MaxMindDownloader
@@ -32,9 +32,9 @@ class GeoIpRoutes(
 			case _ => "Invalid IP address format".asLeft
 		}
 	
-	private def buildLocationsTree(locations: Seq[GeoIpLocation]): Option[GeoRegionInfo] =
+	private def buildLocationsTree(locations: Seq[GeoIpLocation]): Option[GeoRegionTreeInfo] =
 		locations.headOption.map { location =>
-			GeoRegionInfo(
+			GeoRegionTreeInfo(
 				id = location.id,
 				level = GeoRegionLevel.withNameLowercaseOnly(location.level.replace("_", "")),
 				code = location.code,
@@ -43,7 +43,7 @@ class GeoIpRoutes(
 			)
 		}
 	
-	val searchRoute: HttpRoutes[IO] = GeoIpApi.searchEndpoint.toRoutes { case (localeCode, address) =>
+	val searchIpRoute: HttpRoutes[IO] = GeoIpApi.searchIpEndpoint.toRoutes { case (localeCode, address) =>
 		IO.pure(parseAddress(address))
 			.flatMap(_.map(
 				geoIpBlockService.find(_, localeCode)
@@ -67,6 +67,18 @@ class GeoIpRoutes(
 			})
 	}
 	
+	val searchLocationRoute: HttpRoutes[IO] = GeoIpApi.searchLocationEndpoint.toRoutes { case (localeCode, name) =>
+		geoIpLocationService.find(localeCode, name, 10).map(_.map(location =>
+			GeoRegionInfo(
+				id = location.id,
+				level = GeoRegionLevel.withNameLowercaseOnly(location.level.replace("_", "")),
+				name = location.name,
+				code = location.code,
+				parentId = location.parentId
+			)
+		).asRight[String])
+	}
+	
 	val localesRoute: HttpRoutes[IO] = GeoIpApi.localesEndpoint.toRoutes(_ =>
 		geoIpLocaleService.findAll().map(_.asRight[String])
 	)
@@ -88,5 +100,5 @@ class GeoIpRoutes(
 		).to[IO]
 	})
 	
-	val routes: HttpRoutes[IO] = searchRoute <+> localesRoute <+> statusRoute <+> updateRoute
+	val routes: HttpRoutes[IO] = searchIpRoute <+> searchLocationRoute <+> localesRoute <+> statusRoute <+> updateRoute
 }

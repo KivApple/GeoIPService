@@ -8,12 +8,19 @@ import io.circe.generic.auto._
 import com.eternal_search.geoip_service.dto._
 
 object GeoIpApi {
-	val searchEndpoint: Endpoint[(String, String), String, GeoIpInfo, Any] =
+	val searchIpEndpoint: Endpoint[(String, String), String, GeoIpInfo, Any] =
 		endpoint
 			.get
-			.in("search" / path[String]("localeCode") / path[String]("address"))
+			.in("ip" / path[String]("localeCode") / path[String]("address"))
 			.errorOut(stringBody)
 			.out(jsonBody[GeoIpInfo])
+	
+	val searchLocationEndpoint: Endpoint[(String, String), String, Seq[GeoRegionInfo], Any] =
+		endpoint
+			.get
+			.in("location" / path[String]("localeCode") / path[String]("name"))
+			.errorOut(stringBody)
+			.out(jsonBody[Seq[GeoRegionInfo]])
 	
 	val localesEndpoint: Endpoint[Unit, String, Seq[String], Any] =
 		endpoint
@@ -35,5 +42,5 @@ object GeoIpApi {
 			.in("update")
 			.errorOut(stringBody)
 	
-	val endpoints = Seq(searchEndpoint, localesEndpoint, statusEndpoint, updateEndpoint)
+	val endpoints = Seq(searchIpEndpoint, searchLocationEndpoint, localesEndpoint, statusEndpoint, updateEndpoint)
 }

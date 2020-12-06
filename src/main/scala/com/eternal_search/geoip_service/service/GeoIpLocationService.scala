@@ -1,5 +1,6 @@
 package com.eternal_search.geoip_service.service
 
+import cats.effect.IO
 import com.eternal_search.geoip_service.Database
 import com.eternal_search.geoip_service.model.GeoIpLocation
 import doobie.ConnectionIO
@@ -26,4 +27,9 @@ class GeoIpLocationService(val db: Database) {
 			).map(_ => chunk))
 			.flatMap(Stream.eval)
 			.flatMap(Stream.chunk)
+	
+	def find(localeCode: String, name: String, limit: Int): IO[Seq[GeoIpLocation]] =
+		run(locations.filter(location =>
+			location.localeCode == lift(localeCode) && location.name.exists(_.startsWith(lift(name)))
+		).take(lift(limit))).transact(db.xa)
 }
