@@ -35,7 +35,7 @@ object Main extends IOApp {
 				).routes
 				
 				(config.maxMind.updateIntervalDays match {
-					case Some(interval) => GeoIpAutoUpdater.run(storage, updater, interval)
+					case Some(interval) => if (interval > 0) GeoIpAutoUpdater.run(storage, updater, interval) else IO.unit
 					case None => IO.unit
 				}).flatMap { _ =>
 					val startServer = BlazeServerBuilder[IO](ExecutionContext.global)
