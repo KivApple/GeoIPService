@@ -1,9 +1,15 @@
 package com.eternal_search.geoip_service.maxmind
 
+import cats.effect.{Blocker, ContextShift, Resource, Sync}
+import cats.implicits.catsSyntaxApplicativeId
 import com.eternal_search.geoip_service.model.{GeoIpBlock, GeoIpLocation, GeoIpTimezone}
+import com.eternal_search.geoip_service.service.GeoIpStorage
 import fs2.Stream
 import org.slf4j.LoggerFactory
 
+import java.io.{BufferedInputStream, InputStream}
+import java.nio.file.{Files, Path}
+import java.util.zip.ZipInputStream
 import scala.collection.immutable.{Map, Seq}
 
 object MaxMindParser {
@@ -61,11 +67,10 @@ object MaxMindParser {
 		}
 	}
 	
-	def parseLocationsData[F[_], R](
+	private def parseLocationsData[F[_], R](
 		localeCode: String,
 		stream: Stream[F, (Array[String], Map[String, Int])],
-		locationConsumer: Stream[F, GeoIpLocation] => Stream[F, R],
-		timezoneConsumer: Stream[F, GeoIpTimezone] => Stream[F, R]
+		updater: GeoIpStorage.Updater[F]
 	): Stream[F, Unit] =
 		stream
 			.filter { case (entry, headers) => entry.length == headers.size }
@@ -132,7 +137,7 @@ object MaxMindParser {
 					.flatMap(timezoneMap =>
 						Stream.unfold(timezoneMap.iterator)(it => if (it.hasNext) Some(it.next, it) else None)
 							.map { case (name, id) => GeoIpTimezone(id = id, name = name) }
-							.through(timezoneConsumer)
+							.through(updater.insertTimezones)
 							.last
 							.map(_ => timezoneMap)
 					)
@@ -155,25 +160,9 @@ object MaxMindParser {
 			.flatMap(locations =>
 				Stream.unfold(locations.iterator)(it => if (it.hasNext) Some(it.next, it) else None)
 			)
-			.through(locationConsumer)
+			.through(updater.insertLocations)
 			.fold(0) { case (count, _) => count + 1 }
 			.map(log.info("Imported {} locations for locale {}", _, localeCode))
-	
-	def parseIPv6(address: String): String = {
-		val parts = (address + "x").split("::")
-		parts(parts.length - 1) = parts(parts.length - 1).dropRight(1)
-		var words = parts(0).split(":").filter(_.nonEmpty).map(Integer.parseInt(_, 16))
-		if (parts.size > 1) {
-			val restWords = parts(1).split(":").filter(_.nonEmpty).map(Integer.parseInt(_, 16))
-			words = words ++ Array.fill(8 - words.length - restWords.length)(0) ++ restWords
-		}
-		String.join("", words.map("%04x".format(_)): _*)
-	}
-	
-	def parseIPv4(address: String): String = {
-		val bytes = address.split('.').map(_.toInt)
-		parseIPv6("::ffff:%02x%02x:%02x%02x".format(bytes(0), bytes(1), bytes(2), bytes(3)))
-	}
 	
 	private def makeIPRange(address: String, size: Int): (String, String) = {
 		val invertedMask = (BigInt(1) << (128 - size)) - 1
@@ -187,12 +176,12 @@ object MaxMindParser {
 	
 	private def makeIPv6Range(network: String): (String, String) = {
 		val Array(address, size) = network.split('/')
-		makeIPRange(parseIPv6(address), size.toInt)
+		makeIPRange(GeoIpStorage.parseIPv6(address), size.toInt)
 	}
 	
 	private def makeIPv4Range(network: String): (String, String) = {
 		val Array(address, size) = network.split('/')
-		makeIPRange(parseIPv4(address), size.toInt + 96)
+		makeIPRange(GeoIpStorage.parseIPv4(address), size.toInt + 96)
 	}
 	
 	private def parseBlockData(
@@ -215,14 +204,81 @@ object MaxMindParser {
 		)
 	}
 	
-	def parseBlocksData[F[_], R](
+	private def parseBlocksData[F[_], R](
 		addressFamily: String,
 		stream: Stream[F, (Array[String], Map[String, Int])],
-		consumer: Stream[F, GeoIpBlock] => Stream[F, R]
+		updater: GeoIpStorage.Updater[F]
 	): Stream[F, Unit] = stream
 		.filter { case (entry, headers) => entry.length == headers.size }
 		.map { case (entry, headers) => parseBlockData(entry, headers, addressFamily) }
-		.through(consumer)
+		.through(updater.insertBlocks)
 		.fold(0) { case (count, _) => count + 1 }
 		.map(log.info("Imported {} {} blocks", _, addressFamily))
+	
+	private def parseDataFile[F[_]](
+		name: String,
+		kind: String,
+		stream: Stream[F, Byte],
+		updater: GeoIpStorage.Updater[F]
+	): Stream[F, Unit] = {
+		log.debug("Loading data for {} ({})...", name, kind)
+		stream
+			.through(fs2.text.utf8Decode)
+			.through(fs2.text.lines)
+			.map(_.split(','))
+			.mapAccumulate(Map[String, Int]()) {
+				case (headers, line) => if (headers.isEmpty)
+					(line.zipWithIndex.toMap, None)
+				else
+					(headers, Some(line))
+			}
+			.map(_.swap)
+			.filter { case (entry, _) => entry.nonEmpty }
+			.map { case (entry, headers) => (entry.get, headers) }
+			.through { lines =>
+				name match {
+					case "Locations" => parseLocationsData(kind, lines, updater)
+					case "Blocks" => parseBlocksData(kind, lines, updater)
+					case _ => Stream(log.warn("Unknown data file type: {}", name))
+				}
+			}
+	}
+	
+	def parseDataArchive[F[_] : Sync : ContextShift](
+		updater: GeoIpStorage.Updater[F], path: Path, blocker: Blocker
+	): F[Unit] = {
+		Stream.resource(Resource.fromAutoCloseable(
+			Sync[F].delay(new ZipInputStream(new BufferedInputStream(Files.newInputStream(path))))
+		))
+			.flatMap(Stream.unfoldEval(_)(zip =>
+				Sync[F].delay(Option(zip.getNextEntry).map(entry => ((entry, zip), zip)))
+			))
+			.map { case (entry, zip) => (entry.getName, zip) }
+			.filter { case (name, _) => name.endsWith(".csv")}
+			.map { case (name, zip) => (name.split('/').last, zip) }
+			.map { case (name, zip) => (String.join(".", name.split('.').dropRight(1):_*), zip) }
+			.map { case (name, zip) => (name.split("-", 4).drop(2), zip) }
+			.map { case (name, zip) => (
+				name,
+				fs2.io.readInputStream[F](
+					zip.asInstanceOf[InputStream].pure[F],
+					4096,
+					blocker,
+					closeAfterUse = false
+				)
+			) }
+			.flatMap { case (name, stream) =>
+				parseDataFile(name(0), name(1), stream, updater).flatMap(_ =>
+					if (name(0) == "Locations")
+						Stream.emit(name(1))
+					else
+						Stream.empty
+				)
+			}
+			.through(updater.insertLocales)
+			.fold(0) { case (count, _) => count + 1 }
+			.map(log.info("Imported {} locales", _))
+			.compile
+			.drain
+	}
 }
