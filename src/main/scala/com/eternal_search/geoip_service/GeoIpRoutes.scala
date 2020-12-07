@@ -2,13 +2,14 @@ package com.eternal_search.geoip_service
 
 import cats.implicits.catsSyntaxEitherId
 import cats.syntax.semigroupk._
-import cats.effect.{ContextShift, IO, Timer}
+import cats.effect.{Blocker, ContextShift, IO, Timer}
 import com.eternal_search.geoip_service.dto._
 import com.eternal_search.geoip_service.model.GeoIpLocation
 import com.eternal_search.geoip_service.service.{GeoIpStorage, GeoIpUpdater}
 import sttp.tapir.server.http4s._
 import org.http4s.HttpRoutes
 
+import scala.concurrent.ExecutionContext
 import scala.util.matching.Regex
 
 class GeoIpRoutes[F[_]](
@@ -16,10 +17,13 @@ class GeoIpRoutes[F[_]](
 	private val geoIpUpdater: GeoIpUpdater
 )(
 	implicit private val contextShift: ContextShift[IO],
-	implicit private val timer: Timer[IO]
+	implicit private val timer: Timer[IO],
+	implicit val executionContext: ExecutionContext
 ) {
 	private val IPV4_PATTERN = new Regex("^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$")
 	private val IPV6_PATTERN = new Regex("(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))")
+	
+	private val blocker = Blocker.liftExecutionContext(executionContext)
 	
 	private def parseAddress(address: String): Either[String, String] =
 		address match {
@@ -89,12 +93,19 @@ class GeoIpRoutes[F[_]](
 			)
 		)
 	)
-
-	val updateRoute: HttpRoutes[IO] = GeoIpApi.updateEndpoint.toRoutes(_ => {
+	
+	val downloadUpdateRoute: HttpRoutes[IO] = GeoIpApi.downloadUpdateEndpoint.toRoutes(_ => {
 		geoIpUpdater.launchUpdate.flatMap(_ =>
 			IO.pure(().asRight[String])
 		)
 	})
 	
-	val routes: HttpRoutes[IO] = searchIpRoute <+> searchLocationRoute <+> localesRoute <+> statusRoute <+> updateRoute
+	val updateRoute: HttpRoutes[IO] = GeoIpApi.updateEndpoint.toRoutes(request => {
+		geoIpUpdater.launchUpdate(fs2.io.file.readAll[IO](request.file, blocker, 4096)).flatMap(_ =>
+			IO.pure(().asRight[String])
+		)
+	})
+	
+	val routes: HttpRoutes[IO] = searchIpRoute <+> searchLocationRoute <+> localesRoute <+>
+		statusRoute <+> downloadUpdateRoute <+> updateRoute
 }

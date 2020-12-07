@@ -32,6 +32,7 @@ Service that serves MaxMind GeoIP database
 |`GET /location/{localeCode}/{name}`|Search 10 locations with names are starting with given string|
 |`GET /locales`|Returns the list of all supported locales|
 |`GET /status`|Returns current status of the service (last update date, running update status)|
-|`POST /update`|Perform database update (async, use `/status` to monitor progress)|
+|`POST /update/download`|Perform database download and update (async, use `/status` to monitor progress)|
+|`POST /update`|Perform database update using provided archive (async, use `/status` to monitor progress)|
 
 There are also `/docs/docs.yaml` with OpenAPI description of the service and Swagger UI on `/docs`.

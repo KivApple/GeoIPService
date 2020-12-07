@@ -2,6 +2,7 @@ package com.eternal_search.geoip_service.maxmind
 
 import cats.effect.concurrent.Ref
 import cats.effect.{Blocker, ConcurrentEffect, ContextShift, IO, Sync, Timer}
+import cats.implicits.catsSyntaxEitherId
 import com.eternal_search.geoip_service.dto.GeoIpUpdateStatus
 import com.eternal_search.geoip_service.service.{GeoIpStorage, GeoIpUpdater}
 import com.eternal_search.geoip_service.Config
@@ -105,11 +106,8 @@ class MaxMindDownloader[F[_] : Sync : ContextShift](
 		downloadingFlag.getAndSet(true).flatMap(flag =>
 			if (!flag) {
 				val path = Paths.get(tempDir, "archive.zip")
-				IO(Files.exists(path)).flatMap(
-					if (_) IO({
-						log.info("Database archive already exists. Skipping downloading...")
-						Right(path)
-					}) else downloadUri.map(uri => downloadDatabaseArchive(uri, path).map(_.map(_ => path)))
+				IO(Files.deleteIfExists(path)).flatMap(_ =>
+					downloadUri.map(uri => downloadDatabaseArchive(uri, path).map(_.map(_ => path)))
 						.getOrElse(throw new Exception("No database download URL specified"))
 				) <* downloadingFlag.set(false)
 			} else {
@@ -117,6 +115,21 @@ class MaxMindDownloader[F[_] : Sync : ContextShift](
 			}
 		)
 	}
+	
+	override def launchUpdate(binaryStream: Stream[IO, Byte]): IO[Either[Throwable, Unit]] =
+		downloadingFlag.getAndSet(true).flatMap(flag =>
+			if (!flag) {
+				val path = Paths.get(tempDir, "archive.zip")
+				IO(Files.deleteIfExists(path)).flatMap(_ =>
+					storeStream(binaryStream.through(logStreamProgress), path).flatMap {
+						case Left(err) => IO.pure(Left(err))
+						case Right(_) => parseDataArchive(path).runAsync(_ => IO.unit).map(_ => Right()).to[IO]
+					}
+				) <* downloadingFlag.set(false)
+			} else {
+				IO.pure(Left(new Exception("Database is already downloading now")))
+			}
+		)
 	
 	def downloadAndUpdateDatabase: IO[Either[Throwable, Unit]] =
 		downloadArchive.flatMap {
