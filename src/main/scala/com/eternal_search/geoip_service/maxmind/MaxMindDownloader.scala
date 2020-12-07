@@ -2,7 +2,6 @@ package com.eternal_search.geoip_service.maxmind
 
 import cats.effect.concurrent.Ref
 import cats.effect.{Blocker, ConcurrentEffect, ContextShift, IO, Sync, Timer}
-import cats.implicits.catsSyntaxEitherId
 import com.eternal_search.geoip_service.dto.GeoIpUpdateStatus
 import com.eternal_search.geoip_service.service.{GeoIpStorage, GeoIpUpdater}
 import com.eternal_search.geoip_service.Config

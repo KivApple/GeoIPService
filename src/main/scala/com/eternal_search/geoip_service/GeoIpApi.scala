@@ -1,13 +1,11 @@
 package com.eternal_search.geoip_service
 
-import cats.effect.IO
 import sttp.tapir._
 import sttp.tapir.generic.auto._
 import sttp.tapir.json.circe._
 import sttp.tapir.codec.enumeratum._
 import io.circe.generic.auto._
 import com.eternal_search.geoip_service.dto._
-import sttp.model.Part
 
 import java.nio.file.Path
 
