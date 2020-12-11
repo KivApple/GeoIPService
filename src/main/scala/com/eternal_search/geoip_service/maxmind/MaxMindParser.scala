@@ -4,7 +4,7 @@ import cats.effect.{Blocker, ContextShift, Resource, Sync}
 import cats.implicits.catsSyntaxApplicativeId
 import com.eternal_search.geoip_service.model.{GeoIpBlock, GeoIpLocation, GeoIpTimezone}
 import com.eternal_search.geoip_service.service.GeoIpStorage
-import fs2.Stream
+import fs2.{Pure, Stream}
 import org.slf4j.LoggerFactory
 
 import java.io.{BufferedInputStream, InputStream}
@@ -45,20 +45,26 @@ object MaxMindParser {
 		parentKey: Option[String]
 	)
 	
+	private case class LocationPathEntry(
+		level: String,
+		name: Option[String],
+		code: Option[String]
+	)
+	
 	private def getLocationFromMap(
-		path: Seq[(String, (String, Option[String], Option[String]))],
+		path: Seq[(String, LocationPathEntry)],
 		locations: Map[String, LocationInfo]
 	): (LocationInfo, Map[String, LocationInfo]) = path.last match {
-		case (pathStr, (key, name, code)) => locations.get(pathStr) match {
+		case (pathStr, entry) => locations.get(pathStr) match {
 			case Some(value) => (value, locations)
 			case None =>
 				val parentPath = path.dropRight(1)
 				val parent = if (parentPath.nonEmpty) Some(getLocationFromMap(parentPath, locations)) else None
 				val location = LocationInfo(
 					id = Seq.empty,
-					name = name,
-					code = code,
-					level = key,
+					name = entry.name,
+					code = entry.code,
+					level = entry.level,
 					timezone = None,
 					isInEuropeanUnion = None,
 					parentKey = parentPath.lastOption.map(_._1)
@@ -66,6 +72,30 @@ object MaxMindParser {
 				(location, parent.map(_._2).getOrElse(locations).updated(pathStr, location))
 		}
 	}
+	
+	private def parseLocationPath(
+		entry: Array[String],
+		headers: Map[String, Int]
+	): Stream[Pure, LocationPathEntry] =
+		Stream(LEVELS: _*)
+			.map { case (key, nameKey, codeKey) =>
+				(key, nameKey.flatMap(headers.get), codeKey.flatMap(headers.get))
+			}
+			.map { case (key, nameIndex, codeIndex) =>
+				LocationPathEntry(key, nameIndex.map(entry), codeIndex.map(entry))
+			}
+			.filter { entry => entry.name.nonEmpty || entry.code.nonEmpty }
+			.map { entry =>
+				entry.copy(name = entry.name.map(_.replace("\"", "")))
+			}
+	
+	private def buildLocationPaths[F[_]](stream: Stream[F, LocationPathEntry]): Stream[F, (String, LocationPathEntry)] =
+		stream.mapAccumulate("") { case (path, entry) =>
+			("%s/%s".format(
+				path,
+				"%s|%s".format(entry.name.getOrElse(""), entry.code.getOrElse(""))
+			), entry)
+		}
 	
 	private def parseLocationsData[F[_], R](
 		localeCode: String,
@@ -75,23 +105,8 @@ object MaxMindParser {
 		stream
 			.filter { case (entry, headers) => entry.length == headers.size }
 			.mapAccumulate(Map[String, LocationInfo]()) { case (result, (entry, headers)) =>
-				val path = Stream(LEVELS: _*)
-					.map { case (key, nameKey, codeKey) => (key, nameKey.map(headers), codeKey.map(headers)) }
-					.map { case (key, nameIndex, codeIndex) => (key, nameIndex.map(entry), codeIndex.map(entry)) }
-					.map { case (key, name, code) => (
-						key,
-						name.flatMap(name => if (name.nonEmpty) Some(name) else None),
-						code.flatMap(code => if (code.nonEmpty) Some(code) else None)
-					)
-					}
-					.filter { case (_, name, code) => name.nonEmpty || code.nonEmpty }
-					.map { case (key, name, code) => (key, name.map(_.replace("\"", "")), code) }
-					.mapAccumulate("") { case (path, (key, name, code)) =>
-						("%s/%s".format(
-							path,
-							"%s|%s".format(name.getOrElse(""), code.getOrElse(""))
-						), (key, name, code))
-					}
+				val path = parseLocationPath(entry, headers)
+					.through(buildLocationPaths)
 					.toVector
 				val (location, newResult) = getLocationFromMap(path, result)
 				path.last match {
